@@ -7,8 +7,13 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to publish, for example v1.0.0"
-        required: true
+        description: "Optional existing tag to publish, for example v1.0.0"
+        required: false
+      publish:
+        description: "Publish the GitHub release and GHCR image"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -17,6 +22,8 @@ permissions:
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+  RELEASE_REF: ${{ inputs.tag || github.ref }}
+  PUBLISH_RELEASE: ${{ github.event_name == 'push' || inputs.publish }}
 
 jobs:
   test:
@@ -25,7 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ env.RELEASE_REF }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -56,7 +63,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ env.RELEASE_REF }}
 
       - name: Build source archive
         run: |
@@ -76,7 +83,7 @@ jobs:
             dist/checksums.txt
 
       - name: Publish GitHub release
-        if: startsWith(env.RELEASE_TAG, 'v')
+        if: startsWith(env.RELEASE_TAG, 'v') && env.PUBLISH_RELEASE == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -90,11 +97,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ env.RELEASE_REF }}
 
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
+        if: env.PUBLISH_RELEASE == 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -105,13 +113,14 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=tag
+            type=ref,event=tag,enable=${{ startsWith(env.RELEASE_TAG, 'v') }}
             type=raw,value=${{ env.RELEASE_TAG }},enable=${{ startsWith(env.RELEASE_TAG, 'v') }}
-            type=raw,value=latest,enable=${{ startsWith(env.RELEASE_TAG, 'v') }}
+            type=raw,value=latest,enable=${{ startsWith(env.RELEASE_TAG, 'v') && env.PUBLISH_RELEASE == 'true' }}
+            type=raw,value=release-dry-run,enable=${{ !startsWith(env.RELEASE_TAG, 'v') }}
 
       - uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
+          push: ${{ env.PUBLISH_RELEASE == 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
